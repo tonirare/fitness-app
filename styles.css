@@ -232,7 +232,12 @@ p.gold-text, span.gold-text, small.gold-text, div.gold-text { display: inline-bl
 .sheet { width: 100%; max-width: 560px; max-height: 88vh; overflow-y: auto; background: linear-gradient(170deg, #262C55, #1A1E3A);
   border: 1px solid var(--glass-border); border-bottom: 0; border-radius: 28px 28px 0 0;
   padding: 10px 18px calc(var(--safe-b) + 24px); animation: up .28s cubic-bezier(.2, .9, .3, 1); -webkit-overflow-scrolling: touch; }
-.sheet .grab { width: 40px; height: 5px; border-radius: 3px; background: var(--glass-border); margin: 0 auto 14px; }
+.sheet-top { position: sticky; top: -10px; z-index: 5; margin: -10px -18px 8px; padding: 10px 14px 6px; display: flex; justify-content: center; align-items: center; min-height: 54px;
+  background: linear-gradient(180deg, #262C55 70%, rgba(38, 44, 85, 0)); }
+.sheet .grab { width: 44px; height: 5px; border-radius: 3px; background: var(--accent-hi); opacity: .5; }
+.sheet-close { position: absolute; right: 12px; top: 10px; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: var(--glass-strong); border: 1px solid var(--glass-border); }
+.sheet-close svg { width: 20px; height: 20px; fill: none; stroke: #fff; stroke-width: 2.2; stroke-linecap: round; }
 .sheet h2 { margin-top: 0; }
 @keyframes up { from { transform: translateY(100%); } }
 @keyframes fade { from { opacity: 0; } }

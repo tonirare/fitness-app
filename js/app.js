@@ -808,10 +808,34 @@
   // ---------- Sheet ----------
   function openSheet(html) {
     const el = $("#sheet");
-    el.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
+    el.innerHTML = `<div class="sheet" role="dialog" aria-modal="true">
+      <div class="sheet-top"><div class="grab"></div><button class="sheet-close" data-act="sheet-close" aria-label="Schließen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      ${html}</div>`;
     el.classList.remove("hidden");
+    document.body.style.overflow = "hidden";
   }
-  function closeSheet() { stopScan(); $("#sheet").classList.add("hidden"); $("#sheet").innerHTML = ""; }
+  // Nach unten wischen schließt das Fenster
+  let swipeY = null, swipeDy = 0;
+  document.addEventListener("touchstart", (e) => {
+    const sh = e.target.closest(".sheet");
+    if (!sh || (sh.scrollTop > 0 && !e.target.closest(".sheet-top"))) { swipeY = null; return; }
+    swipeY = e.touches[0].clientY; swipeDy = 0;
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (swipeY == null) return;
+    swipeDy = e.touches[0].clientY - swipeY;
+    const sh = $(".sheet");
+    if (sh && swipeDy > 0) { sh.style.transition = "none"; sh.style.transform = `translateY(${swipeDy}px)`; }
+  }, { passive: true });
+  document.addEventListener("touchend", () => {
+    if (swipeY == null) return;
+    const sh = $(".sheet");
+    if (swipeDy > 110) closeSheet();
+    else if (sh) { sh.style.transition = "transform .2s ease"; sh.style.transform = ""; }
+    swipeY = null; swipeDy = 0;
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#sheet").classList.contains("hidden")) closeSheet(); });
+  function closeSheet() { stopScan(); $("#sheet").classList.add("hidden"); $("#sheet").innerHTML = ""; document.body.style.overflow = ""; }
 
   // ---------- Aktionen ----------
   function addFood(food, g) {
@@ -845,6 +869,7 @@
 
     switch (act) {
       case "settings": settingsSheet(); break;
+      case "sheet-close": closeSheet(); break;
       case "pick-day": pickDay = a.dataset.day; render(); break;
       case "start-workout": {
         const date = ($("#pick-date") && $("#pick-date").value) || today();
