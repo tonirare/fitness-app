@@ -1,6 +1,8 @@
 (function () {
   "use strict";
 
+  const APP_VERSION = 3; // bei jeder Änderung zusammen mit CACHE in sw.js erhöhen
+
   // ---------- Speicher ----------
   const KEY = "fit.v1";
   const blank = () => ({
@@ -790,7 +792,8 @@
       <div class="tile" style="margin-bottom:12px"><p class="label">Backup</p>
         <p class="muted small" style="margin-top:0">Deine Daten liegen nur auf diesem Handy. Mach ab und zu ein Backup, z. B. in iCloud Drive.</p>
         <div class="grid2"><button class="btn" data-act="export">Sichern</button><label class="btn" style="cursor:pointer">Laden<input type="file" id="import-file" accept="application/json,.json" hidden></label></div></div>
-      <button class="btn block danger" data-act="reset">Alle Daten löschen</button>`);
+      <button class="btn block danger" data-act="reset">Alle Daten löschen</button>
+      <p class="muted small" style="text-align:center;margin-top:16px">App-Version ${APP_VERSION}</p>`);
   }
   async function exportData() {
     const blob = new Blob([JSON.stringify(S, null, 1)], { type: "application/json" });
@@ -1052,7 +1055,18 @@
 
   // ---------- Start ----------
   if ("serviceWorker" in navigator && location.protocol !== "file:") {
-    navigator.serviceWorker.register("sw.js").catch(() => { });
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((reg) => {
+      // Beim Zurückkehren in die App nach Updates suchen
+      document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => { }); });
+    }).catch(() => { });
+    // Neue Version aktiv: einmal neu laden (nicht mitten im Training, nicht bei offenem Fenster)
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadController || reloaded) return;
+      if (S.active || !$("#sheet").classList.contains("hidden")) { toast("Neue Version bereit – App neu öffnen"); return; }
+      reloaded = true; location.reload();
+    });
   }
   checkBadges(true);
   render();

@@ -1,6 +1,6 @@
 // Offline-Speicher für die App-Dateien.
 // Bei jeder Änderung an der App die Versionsnummer erhöhen.
-const CACHE = "fitness-v2";
+const CACHE = "fitness-v3";
 const FILES = [
   "./",
   "./index.html",
@@ -17,7 +17,11 @@ const FILES = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(
+    caches.open(CACHE)
+      .then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: "reload" }))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", (e) => {
@@ -30,9 +34,9 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.origin !== location.origin) return;
-  // Erst Netz (damit Updates ankommen), sonst Offline-Speicher
+  // Erst Netz (ohne Browser-Zwischenspeicher, damit Updates sofort ankommen), sonst Offline-Speicher
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: "no-cache" })
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy));
