@@ -299,12 +299,38 @@ p.gold-text, span.gold-text, small.gold-text, div.gold-text { display: inline-bl
 .result { width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 10px; padding: 12px 4px; border-top: 1px solid rgba(149, 163, 236, .14); }
 .result:first-child { border-top: 0; }
 .result .name { font-weight: 600; }
-.recent { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
-.recent::-webkit-scrollbar { display: none; }
-.recent button { flex-shrink: 0; padding: 10px 14px; border-radius: 999px; background: var(--glass); border: 1px solid var(--glass-border); font-size: 14px; font-weight: 600; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.scanner { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border-radius: var(--radius-sm); overflow: hidden; }
-.scanner video { width: 100%; height: 100%; object-fit: cover; }
-.scanner .frame { position: absolute; inset: 22% 12%; border: 3px solid var(--accent-hi); border-radius: 14px; box-shadow: 0 0 0 999px rgba(0, 0, 0, .35); }
 
 .empty { text-align: center; padding: 24px 8px; color: var(--text-2); }
 .info-btn { display: inline-flex; width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid currentColor; font-size: 12px; font-weight: 700; align-items: center; justify-content: center; vertical-align: 2px; margin-left: 4px; font-style: normal; }
+
+/* Wochenvergleich */
+.weeks { display: flex; gap: 6px; overflow-x: auto; padding: 10px 2px 2px; margin-top: 4px; scroll-snap-type: x proximity; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.weeks::-webkit-scrollbar { display: none; }
+.wk { flex: 0 0 46px; display: flex; flex-direction: column; align-items: center; gap: 4px; scroll-snap-align: end; padding: 4px 0; border-radius: 12px; }
+.wk .val { font-size: 10px; color: var(--text-3); height: 13px; white-space: nowrap; font-weight: 600; }
+.wk .col { width: 28px; height: 120px; display: flex; align-items: flex-end; border-radius: 8px; background: rgba(14, 16, 36, .35); }
+.wk .col i { display: block; width: 100%; border-radius: 8px; background: rgba(149, 163, 236, .32); transition: height .4s ease; }
+.wk .dots { display: flex; gap: 2px; height: 5px; }
+.wk .dots b { width: 5px; height: 5px; border-radius: 50%; background: var(--text-3); }
+.wk .lb { font-size: 11px; color: var(--text-3); font-weight: 600; white-space: nowrap; }
+.wk.ref .col i { background: rgba(149, 163, 236, .62); }
+.wk.ref .lb { color: var(--text-2); }
+.wk.on { background: var(--glass-strong); }
+.wk.on .col i { background: linear-gradient(180deg, #B9C3FF, #505DC3); box-shadow: 0 0 14px rgba(149, 163, 236, .5); }
+.wk.on .val, .wk.on .lb { color: #fff; }
+.wk.on .dots b { background: var(--accent-hi); }
+.cmp3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
+.cmp3 > div { background: rgba(14, 16, 36, .35); border-radius: var(--radius-sm); padding: 10px; min-width: 0; }
+.cmp3 .v { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin: 2px 0 4px; white-space: nowrap; }
+.delta { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: rgba(149, 163, 236, .14); color: var(--text-2); white-space: nowrap; }
+.delta.up { color: #8FE3B0; background: rgba(80, 200, 140, .15); }
+.delta.down { color: var(--danger); background: rgba(242, 139, 139, .14); }
+.cmp-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 0; border-top: 1px solid rgba(149, 163, 236, .14); }
+.cmp-row:first-child { border-top: 0; padding-top: 2px; }
+.cmp-row:last-child { padding-bottom: 2px; }
+.cmp-row .delta { margin-top: 3px; }
+
+/* Gewicht & Kalorien */
+#weight-form .input, #kcal-form .input { flex: 1; min-width: 0; font-size: 20px; font-weight: 700; }
+#weight-form .btn, #kcal-form .btn { flex-shrink: 0; }
+.set-prev { grid-column: 2 / 4; margin-top: -4px; font-size: 12px; color: var(--text-3); text-align: center; }

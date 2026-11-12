@@ -1,13 +1,12 @@
 # Fitness-App
 
-Persönliche Web-App für Krafttraining und Ernährung. Läuft im Browser und kann auf dem iPhone wie eine echte App installiert werden. Alle Daten bleiben auf dem Handy.
+Persönliche Web-App für Krafttraining, Körpergewicht und Kalorien. Läuft im Browser und kann auf dem iPhone wie eine echte App installiert werden. Alle Daten bleiben auf dem Handy.
 
 ## Aufbau
 - `index.html`, `styles.css`: Seite und Design
 - `js/app.js`: die ganze App-Logik
 - `js/exercises.js`: Muskeln und Übungen (hier kannst du Übungen ergänzen)
 - `js/badges.js`: Abzeichen und Prozentangaben
-- `js/foods.js`: Lebensmittel-Grundliste (funktioniert offline)
 - `sw.js`: Offline-Speicher. **Nach jeder Änderung `CACHE` hochzählen** (z. B. `fitness-v2`)
 
 ## Lokal testen

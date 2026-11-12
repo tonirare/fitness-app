@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const APP_VERSION = 3; // bei jeder Änderung zusammen mit CACHE in sw.js erhöhen
+  const APP_VERSION = 4; // bei jeder Änderung zusammen mit CACHE in sw.js erhöhen
 
   // ---------- Speicher ----------
   const KEY = "fit.v1";
@@ -10,11 +10,24 @@
     workouts: [],
     active: null,
     customExercises: [],
-    food: {},
-    customFoods: [],
-    recentFoods: [],
+    kcal: {},      // Datum -> [{ id, k, t }]
+    weights: {},   // Datum -> kg
     earned: {}
   });
+  // Alte Lebensmittel-Einträge in einfache Kalorien-Einträge umwandeln
+  function migrate(data) {
+    if (data.food) {
+      data.kcal = data.kcal || {};
+      for (const d in data.food) {
+        const items = data.food[d] || [];
+        if (!items.length || data.kcal[d]) continue;
+        data.kcal[d] = items.map((it) => ({ id: it.id || uid(), k: Math.round((it.k * it.g) / 100), t: "" }));
+      }
+    }
+    delete data.food; delete data.customFoods; delete data.recentFoods;
+    data.weights = data.weights || {};
+    return data;
+  }
   let S;
   try { S = Object.assign(blank(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) { S = blank(); }
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Speichern fehlgeschlagen"); } };
@@ -38,6 +51,9 @@
   const longDate = (s) => { const d = parseD(s); return ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"][d.getDay()] + ", " + d.getDate() + ". " + MONTHS[d.getMonth()]; };
   const mondayOf = (s) => { const d = parseD(s); const wd = (d.getDay() + 6) % 7; d.setDate(d.getDate() - wd); return dstr(d); };
   const e1rm = (w, r) => (r <= 0 || w <= 0) ? 0 : (r === 1 ? w : w * (1 + r / 30));
+  const fmtSigned = (n) => (n > 0.05 ? "+" : n < -0.05 ? "−" : "±") + fmt(Math.abs(n));
+  const shortDate = (s) => { const d = parseD(s); return d.getDate() + "." + (d.getMonth() + 1) + "."; };
+  S = migrate(S);
 
   const allExercises = () => window.EXERCISES.concat(S.customExercises);
   const exById = (id) => allExercises().find((e) => e.id === id) || { id, name: id, t: "i", m: "" };
@@ -46,22 +62,26 @@
   const doneSets = (w) => w.entries.reduce((a, e) => a + e.sets.filter((s) => s.done).length, 0);
 
   // ---------- Ziele ----------
-  function targets() {
+  // Kalorienziel aus dem aktuellen Gewicht (Mifflin-St-Jeor, +300 kcal für Muskelaufbau)
+  function targets(weight) {
     const p = S.profile;
-    if (!p) return { k: 2500, p: 150, c: 280, f: 70 };
-    const bmr = 10 * p.weight + 6.25 * p.height - 5 * p.age + (p.sex === "f" ? -161 : 5);
-    const k = Math.round((bmr * p.activity + 300) / 50) * 50; // leichter Überschuss für Muskelaufbau
-    const prot = Math.round(p.weight * 1.8);
-    const f = Math.round((k * 0.25) / 9);
-    const c = Math.max(0, Math.round((k - prot * 4 - f * 9) / 4));
-    return { k, p: prot, c, f };
+    if (!p) return { k: 2500 };
+    const kg = weight || weightOn(today());
+    const bmr = 10 * kg + 6.25 * p.height - 5 * p.age + (p.sex === "f" ? -161 : 5);
+    return { k: Math.round((bmr * p.activity + 300) / 50) * 50 };
   }
-  function dayTotals(date) {
-    return (S.food[date] || []).reduce((t, it) => {
-      const m = it.g / 100;
-      t.k += it.k * m; t.p += it.p * m; t.c += it.c * m; t.f += it.f * m;
-      return t;
-    }, { k: 0, p: 0, c: 0, f: 0 });
+  const kcalOf = (date) => (S.kcal[date] || []).reduce((a, x) => a + x.k, 0);
+  // letztes eingetragenes Gewicht an oder vor diesem Tag
+  function weightOn(date) {
+    let best = null;
+    for (const d in S.weights) if (d <= date && (!best || d > best)) best = d;
+    return best ? S.weights[best] : (S.profile ? S.profile.weight : 0);
+  }
+  const weightSeries = () => Object.keys(S.weights).sort().map((d) => ({ date: d, v: S.weights[d] }));
+  // Profilgewicht = neuester Eintrag
+  function syncProfileWeight() {
+    const ws = weightSeries();
+    if (S.profile && ws.length) S.profile.weight = ws[ws.length - 1].v;
   }
 
   // ---------- Rotation ----------
@@ -98,7 +118,7 @@
 
   function stats() {
     const st = { workouts: 0, bestWeight: {}, bestReps: {}, totalVolume: 0, maxSessionVolume: 0, prs: 0, maxPrsInSession: 0,
-      early: false, night: false, streakWeeks: 0, maxWeek: 0, bodyweight: S.profile ? S.profile.weight : 0, foodDays: 0, proteinStreak: 0 };
+      early: false, night: false, streakWeeks: 0, maxWeek: 0, bodyweight: S.profile ? S.profile.weight : 0, foodDays: 0, weightStreak: 0 };
     const weeks = {};
     for (const w of S.workouts) {
       if (doneSets(w) === 0) continue;
@@ -134,18 +154,14 @@
       }
       st.streakWeeks = best;
     }
-    const days = Object.keys(S.food).filter((d) => (S.food[d] || []).length).sort();
-    st.foodDays = days.length;
-    const tp = targets().p;
+    st.foodDays = Object.keys(S.kcal).filter((d) => (S.kcal[d] || []).length).length;
     let run = 0, best = 0, prev = null;
-    for (const d of days) {
-      const ok = dayTotals(d).p >= tp;
-      if (ok && prev && addDays(prev, 1) === d && run > 0) run++;
-      else run = ok ? 1 : 0;
+    for (const d of Object.keys(S.weights).sort()) {
+      run = prev && addDays(prev, 1) === d ? run + 1 : 1;
       best = Math.max(best, run);
-      prev = ok ? d : null;
+      prev = d;
     }
-    st.proteinStreak = best;
+    st.weightStreak = best;
     return st;
   }
 
@@ -249,7 +265,7 @@
   let tab = S.active ? "training" : "home";
   let calMonth = today().slice(0, 7);
   let foodDate = today();
-  let progEx = null, progMetric = "e1rm";
+  let progEx = null, progMetric = "e1rm", selWeek = null, weeksScroll = null;
   let pickDay = null, pickDate = null;
   let addMuscle = null;
 
@@ -264,12 +280,19 @@
     tabbar.classList.remove("hidden");
     document.querySelectorAll(".tabbar button").forEach((b) => b.classList.toggle("on", b.dataset.nav === tab));
     $(".tab-main").classList.toggle("live", !!S.active);
+    const oldWk = $("#weeks");
+    if (oldWk && tab === "progress") weeksScroll = oldWk.scrollLeft;
     view.innerHTML = { home: viewHome, calendar: viewCalendar, training: viewTraining, food: viewFood, progress: viewProgress }[tab]();
-    if (tab === "progress") drawChart();
+    if (tab === "progress") {
+      drawChart();
+      const wk = $("#weeks");
+      if (wk) wk.scrollLeft = weeksScroll == null ? wk.scrollWidth : weeksScroll;
+    }
+    if (tab === "food") drawWeightChart();
     tick();
     updateWakeLock();
   }
-  function go(t) { tab = t; window.scrollTo(0, 0); render(); }
+  function go(t) { tab = t; weeksScroll = null; selWeek = null; window.scrollTo(0, 0); render(); }
 
   // ---------- Profil ----------
   function profileForm(p, submitLabel) {
@@ -306,7 +329,10 @@
 
   // ---------- Start ----------
   function viewHome() {
-    const t = targets(), tot = dayTotals(today());
+    const t = targets(), eaten = kcalOf(today()), left = t.k - eaten;
+    const wNow = weightOn(today()), ws = weightSeries();
+    const wBefore = ws.filter((p) => p.date <= addDays(today(), -7)).pop();
+    const wToday = S.weights[today()];
     const nd = S.active ? (activeWorkout() || {}).day : nextDay();
     const last = lastOfDay(nd);
     const h = new Date().getHours();
@@ -340,15 +366,14 @@
       <div class="grid2">
         <div class="tile tap" data-nav="food">
           <p class="label">Kalorien</p>
-          <p class="big">${fmt0(tot.k)}</p>
-          <p class="muted small" style="margin:0">von ${fmt0(t.k)} kcal</p>
-          <div class="bar"><div style="width:${Math.min(100, (tot.k / t.k) * 100)}%"></div></div>
+          <p class="big">${fmt0(Math.abs(left))}</p>
+          <p class="muted small" style="margin:0">${left >= 0 ? "noch übrig" : "über dem Ziel"} · Ziel ${fmt0(t.k)}</p>
+          <div class="bar"><div style="width:${Math.min(100, (eaten / t.k) * 100)}%"></div></div>
         </div>
         <div class="tile tap" data-nav="food">
-          <p class="label">Protein</p>
-          <p class="big">${fmt0(tot.p)} g</p>
-          <p class="muted small" style="margin:0">von ${fmt0(t.p)} g</p>
-          <div class="bar protein"><div style="width:${Math.min(100, (tot.p / t.p) * 100)}%"></div></div>
+          <p class="label">Gewicht</p>
+          <p class="big">${fmt(wNow)} kg</p>
+          <p class="muted small" style="margin:0">${wToday == null ? "Heute noch nicht eingetragen" : wBefore ? fmtSigned(wToday - wBefore.v) + " kg seit " + shortDate(wBefore.date) : "Heute eingetragen"}</p>
         </div>
         <div class="tile tap" data-nav="calendar">
           <p class="label">Diese Woche</p>
@@ -391,15 +416,21 @@
     const cards = w.entries.map((e, ei) => {
       const ex = exById(e.ex);
       const prev = lastPerformance(e.ex, w);
-      const rows = e.sets.map((s, si) => `
+      const best = bestSetBefore(e.ex, w);
+      const hint = [best ? "Bestwert " + setTxt(best) : "", prev ? "Letztes Mal am " + shortDate(prev.date) : ""].filter(Boolean).join(" · ");
+      const rows = e.sets.map((s, si) => {
+        const ps = prev && prev.sets[si];
+        return `
         <div class="set-row">
           <div class="n">${si + 1}</div>
           ${stepper(ei, si, "w", s.w, "kg")}
           ${stepper(ei, si, "r", s.r, "Wdh")}
           <button class="check ${s.done ? (s.pr ? "pr" : "done") : ""}" data-act="set-done" data-ei="${ei}" data-si="${si}" aria-label="Satz ${si + 1} erledigt"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
-        </div>`).join("");
+          ${ps ? `<div class="set-prev">zuletzt ${setTxt(ps)}</div>` : ""}
+        </div>`;
+      }).join("");
       return `<div class="tile ex-card" style="margin-bottom:12px">
-        <div class="spread"><div><h3>${esc(ex.name)}</h3><div class="last-hint">${prev ? "Letztes Mal: " + esc(prev) : esc(muscleName(ex.m))}</div></div>
+        <div class="spread"><div><h3>${esc(ex.name)}</h3><div class="last-hint">${hint ? esc(hint) : esc(muscleName(ex.m)) + " · zum ersten Mal"}</div></div>
           <button class="icon-btn" data-act="ex-remove" data-ei="${ei}" aria-label="Übung entfernen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
         <div class="set-head"><span>Satz</span><span>Gewicht</span><span>Wdh.</span><span></span></div>
         ${rows}
@@ -433,16 +464,29 @@
       <button data-act="step" data-ei="${ei}" data-si="${si}" data-f="${field}" data-d="${d}" aria-label="mehr">+</button>
     </div>`;
   }
+  // Sätze vom letzten Training mit dieser Übung (vor dem aktuellen)
   function lastPerformance(exId, current) {
     const list = S.workouts.filter((w) => w !== current && w.date <= current.date).sort((a, b) => (b.date + b.start).localeCompare(a.date + a.start));
     for (const w of list) {
-      const e = w.entries.find((x) => x.ex === exId);
-      if (!e) continue;
-      const sets = e.sets.filter((s) => s.done);
-      if (!sets.length) continue;
-      return sets.map((s) => `${fmt(s.w)}×${s.r}`).join(", ") + " kg";
+      const sets = w.entries.filter((x) => x.ex === exId).flatMap((e) => e.sets.filter((s) => s.done));
+      if (sets.length) return { date: w.date, sets };
     }
-    return "";
+    return null;
+  }
+  // schwerster Satz aller früheren Trainings
+  function bestSetBefore(exId, current) {
+    let best = null;
+    for (const w of S.workouts) {
+      if (w === current || w.date > current.date) continue;
+      for (const e of w.entries) {
+        if (e.ex !== exId) continue;
+        for (const s of e.sets) {
+          if (!s.done) continue;
+          if (!best || s.w > best.w || (s.w === best.w && s.r > best.r)) best = s;
+        }
+      }
+    }
+    return best;
   }
   function markPR(w, ei, si) {
     const e = w.entries[ei], s = e.sets[si];
@@ -490,8 +534,8 @@
   }
   function daySheet(date) {
     const ws = S.workouts.filter((w) => w.date === date && doneSets(w) > 0);
-    const tot = dayTotals(date);
-    const hasFood = (S.food[date] || []).length > 0;
+    const eaten = kcalOf(date), wDay = S.weights[date];
+    const hasFood = eaten > 0 || wDay != null;
     let html = `<h2>${longDate(date)}</h2>`;
     if (!ws.length) html += `<div class="empty">An diesem Tag hast du kein Training eingetragen.</div>`;
     for (const w of ws) {
@@ -499,7 +543,7 @@
       html += w.entries.filter((e) => e.sets.some((s) => s.done)).map((e) => `<div class="entry"><b>${esc(exById(e.ex).name)}</b><div class="sets">${e.sets.filter((s) => s.done).map((s) => `<span class="chip ${s.pr ? "gold" : ""}">${s.pr ? "🏆 " : ""}${fmt(s.w)} kg × ${s.r}</span>`).join("")}</div></div>`).join("");
       html += `</div><div class="row" style="margin-top:12px"><button class="btn small" data-act="edit-workout" data-id="${w.id}">Bearbeiten</button><button class="btn small danger" data-act="delete-workout" data-id="${w.id}">Löschen</button></div></div>`;
     }
-    if (hasFood) html += `<div class="tile"><p class="label">Ernährung</p><p style="margin:0"><b>${fmt0(tot.k)} kcal</b> · ${fmt0(tot.p)} g Protein · ${fmt0(tot.c)} g KH · ${fmt0(tot.f)} g Fett</p></div>`;
+    if (hasFood) html += `<div class="tile"><p class="label">Gewicht &amp; Kalorien</p><p style="margin:0">${wDay != null ? `<b>${fmt(wDay)} kg</b>` : ""}${wDay != null && eaten ? " · " : ""}${eaten ? `<b>${fmt0(eaten)} kcal</b> <span class="muted">von ${fmt0(targets(weightOn(date)).k)}</span>` : ""}</p></div>`;
     if (!ws.length && date <= today()) html += `<button class="btn primary block" style="margin-top:12px" data-act="backfill" data-date="${date}">Training nachtragen</button>`;
     openSheet(html);
   }
@@ -529,6 +573,92 @@
     }
     return pts;
   }
+  // Wochen: von der ersten Trainingswoche (mind. 8 Wochen zurück) bis heute
+  function weekList() {
+    const weeks = {};
+    for (const w of S.workouts) {
+      if (!doneSets(w)) continue;
+      const k = mondayOf(w.date);
+      const o = weeks[k] || (weeks[k] = { n: 0, sets: 0, vol: 0, ex: {} });
+      o.n++;
+      for (const e of w.entries) for (const s of e.sets) {
+        if (!s.done) continue;
+        o.sets++; o.vol += s.w * s.r;
+        const x = o.ex[e.ex] || (o.ex[e.ex] = { w: 0, r: 0, e: 0 });
+        if (s.w > x.w || (s.w === x.w && s.r > x.r)) { x.w = s.w; x.r = s.r; }
+        x.e = Math.max(x.e, e1rm(s.w, s.r));
+      }
+    }
+    const cur = mondayOf(today());
+    const first = Object.keys(weeks).sort()[0];
+    let k = first && first < addDays(cur, -49) ? first : addDays(cur, -49);
+    const list = [];
+    while (k <= cur) { list.push(Object.assign({ key: k }, weeks[k] || { n: 0, sets: 0, vol: 0, ex: {} })); k = addDays(k, 7); }
+    return list;
+  }
+  const isoWeek = (s) => {
+    const d = parseD(s); d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+    const y1 = new Date(d.getFullYear(), 0, 4);
+    return 1 + Math.round(((d - y1) / 864e5 - 3 + (y1.getDay() + 6) % 7) / 7);
+  };
+  const weekName = (k) => k === mondayOf(today()) ? "Diese Woche" : k === addDays(mondayOf(today()), -7) ? "Letzte Woche" : "KW " + isoWeek(k);
+  const fmtVol = (v) => v >= 1000 ? fmt(v / 1000) + " t" : fmt0(v) + " kg";
+  function deltaPill(cur, prev, fmtFn, unit) {
+    const d = Math.round((cur - prev) * 10) / 10;
+    if (Math.abs(d) < 0.05) return `<span class="delta">± 0</span>`;
+    return `<span class="delta ${d > 0 ? "up" : "down"}">${d > 0 ? "▲ +" : "▼ −"}${fmtFn(Math.abs(d))}${unit || ""}</span>`;
+  }
+  function setTxt(x) { return x.w > 0 ? `${fmt(x.w)} kg × ${x.r}` : `${x.r} Wdh.`; }
+  function exDelta(cur, prev) {
+    if (cur.w > 0 || prev.w > 0) {
+      if (Math.abs(cur.w - prev.w) >= 0.05) return deltaPill(cur.w, prev.w, fmt, " kg");
+      return deltaPill(cur.r, prev.r, fmt0, " Wdh.");
+    }
+    return deltaPill(cur.r, prev.r, fmt0, " Wdh.");
+  }
+  function weeksPart() {
+    const list = weekList();
+    if (!selWeek || !list.find((x) => x.key === selWeek)) selWeek = list[list.length - 1].key;
+    const i = list.findIndex((x) => x.key === selWeek);
+    const cur = list[i], prev = list[i - 1] || { key: addDays(cur.key, -7), n: 0, sets: 0, vol: 0, ex: {} };
+    const maxV = Math.max(1, ...list.map((x) => x.vol));
+    const bars = list.map((x) => {
+      const h = x.n ? Math.max(6, Math.round((x.vol / maxV) * 120)) : 0;
+      const cls = x.key === cur.key ? "on" : x.key === prev.key ? "ref" : "";
+      return `<button class="wk ${cls}" data-act="week" data-k="${x.key}" aria-label="${weekName(x.key)}: ${fmtVol(x.vol)}, ${x.n} Trainings">
+        <span class="val">${x.n ? fmtVol(x.vol).replace(" ", " ") : ""}</span>
+        <span class="col"><i style="height:${h}px"></i></span>
+        <span class="dots">${"<b></b>".repeat(Math.min(x.n, 7))}</span>
+        <span class="lb">KW ${isoWeek(x.key)}</span>
+      </button>`;
+    }).join("");
+    const box = (label, a, b, fmtFn, unit) => `<div><p class="label" style="margin:0">${label}</p>
+      <p class="v">${fmtFn(a)}${unit}</p>${deltaPill(a, b, fmtFn, unit)}<p class="muted small" style="margin:4px 0 0">vorher ${fmtFn(b)}${unit}</p></div>`;
+    // Übungen der gewählten Woche mit dem letzten Mal davor vergleichen
+    const rows = Object.keys(cur.ex).map((id) => {
+      const c = cur.ex[id];
+      let p = null, pk = null;
+      for (let j = i - 1; j >= 0; j--) if (list[j].ex[id]) { p = list[j].ex[id]; pk = list[j].key; break; }
+      return { name: exById(id).name, c, p, pk };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+    const rowHtml = rows.map((r) => `<div class="cmp-row">
+        <div style="min-width:0"><b>${esc(r.name)}</b><div class="muted small">${r.p ? (r.pk === prev.key ? "Vorwoche" : weekName(r.pk)) + ": " + setTxt(r.p) : "Zum ersten Mal"}</div></div>
+        <div style="text-align:right;white-space:nowrap"><b>${setTxt(r.c)}</b><div>${r.p ? exDelta(r.c, r.p) : `<span class="delta">neu</span>`}</div></div>
+      </div>`).join("");
+    return `<div class="tile">
+        <div class="spread"><p class="label" style="margin:0">Wochenvergleich</p><span class="muted small">${weekName(cur.key)} vs. ${weekName(prev.key)}</span></div>
+        <div class="weeks" id="weeks">${bars}</div>
+        <p class="muted small" style="margin:6px 0 0;text-align:center">Balken = bewegtes Gewicht · Punkte = Trainings · Woche antippen, nach links wischen für ältere</p>
+        <div class="cmp3">
+          ${box("Trainings", cur.n, prev.n, fmt0, "")}
+          ${box("Sätze", cur.sets, prev.sets, fmt0, "")}
+          ${box("Bewegt", cur.vol / 1000, prev.vol / 1000, fmt, " t")}
+        </div>
+      </div>
+      <h2>Übungen · ${weekName(cur.key)} <span class="muted" style="font-weight:500;font-size:15px">${shortDate(cur.key)}–${shortDate(addDays(cur.key, 6))}</span></h2>
+      <div class="tile">${rowHtml || `<div class="empty">In dieser Woche hast du noch nicht trainiert.</div>`}</div>`;
+  }
+
   function viewProgress() {
     const exs = exercisesWithData();
     if (!progEx || !exs.find((e) => e.id === progEx)) progEx = exs[0] ? exs[0].id : null;
@@ -540,7 +670,7 @@
     } else {
       const pts = seriesFor(progEx, "e1rm");
       const bestE = Math.max(...pts.map((p) => p.v), 0);
-      chartPart = `<div class="tile">
+      chartPart = `<h2>Verlauf pro Übung</h2><div class="tile">
         <label class="field"><span>Übung</span><select class="input" id="prog-ex">${exs.map((e) => `<option value="${e.id}" ${e.id === progEx ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select></label>
         <div class="seg" data-seg="metric">
           <button data-v="e1rm" class="${progMetric === "e1rm" ? "on" : ""}">Max. (1RM)</button>
@@ -565,6 +695,7 @@
       </button>`;
     }).join("");
     return `<div class="head"><div><p class="sub">Dein Fortschritt</p><h1>Erfolge</h1></div></div>
+      ${weeksPart()}
       ${chartPart}
       <div class="grid2" style="margin-top:12px">
         <div class="tile"><p class="label">Trainings</p><p class="big">${st.workouts}</p></div>
@@ -574,25 +705,30 @@
       <div class="badges">${visible}</div>`;
   }
   function drawChart() {
-    const svg = $("#chart");
-    if (!svg || !progEx) return;
-    const pts = seriesFor(progEx, progMetric);
+    if (progEx) lineChart($("#chart"), seriesFor(progEx, progMetric), true);
+  }
+  function drawWeightChart() {
+    lineChart($("#wchart"), weightSeries().slice(-90), false);
+  }
+  function lineChart(svg, pts, markBest) {
+    if (!svg) return;
     const W = svg.clientWidth || 320, H = 220, pl = 40, pr = 12, pt = 14, pb = 26;
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
     if (pts.length === 0) { svg.innerHTML = ""; return; }
     let min = Math.min(...pts.map((p) => p.v)), max = Math.max(...pts.map((p) => p.v));
     if (min === max) { min = min * 0.9; max = max * 1.1 || 1; }
     const padv = (max - min) * 0.15; min = Math.max(0, min - padv); max += padv;
+    const axis = max - min < 10 ? fmt : fmt0;
     const x = (i) => pts.length === 1 ? pl + (W - pl - pr) / 2 : pl + (i / (pts.length - 1)) * (W - pl - pr);
     const y = (v) => pt + (1 - (v - min) / (max - min)) * (H - pt - pb);
     let grid = "";
     for (let i = 0; i <= 3; i++) {
       const v = min + ((max - min) * i) / 3, yy = y(v);
-      grid += `<line x1="${pl}" x2="${W - pr}" y1="${yy}" y2="${yy}" stroke="rgba(149,163,236,.15)"/><text x="${pl - 6}" y="${yy + 4}" text-anchor="end">${fmt0(v)}</text>`;
+      grid += `<line x1="${pl}" x2="${W - pr}" y1="${yy}" y2="${yy}" stroke="rgba(149,163,236,.15)"/><text x="${pl - 6}" y="${yy + 4}" text-anchor="end">${axis(v)}</text>`;
     }
     const line = pts.map((p, i) => `${i ? "L" : "M"}${x(i)},${y(p.v)}`).join(" ");
     const area = `${line} L${x(pts.length - 1)},${H - pb} L${x(0)},${H - pb} Z`;
-    const bestI = pts.reduce((bi, p, i) => (p.v >= pts[bi].v ? i : bi), 0);
+    const bestI = markBest ? pts.reduce((bi, p, i) => (p.v >= pts[bi].v ? i : bi), 0) : -1;
     const lbl = (i) => { const d = parseD(pts[i].date); return d.getDate() + "." + (d.getMonth() + 1) + "."; };
     const labels = pts.length > 1 ? `<text x="${x(0)}" y="${H - 6}" text-anchor="start">${lbl(0)}</text><text x="${x(pts.length - 1)}" y="${H - 6}" text-anchor="end">${lbl(pts.length - 1)}</text>` : `<text x="${x(0)}" y="${H - 6}" text-anchor="middle">${lbl(0)}</text>`;
     svg.innerHTML = `<defs><linearGradient id="ga" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#95A3EC" stop-opacity=".45"/><stop offset="1" stop-color="#95A3EC" stop-opacity="0"/></linearGradient>
@@ -616,171 +752,69 @@
     </div>`);
   }
 
-  // ---------- Ernährung ----------
+  // ---------- Gewicht & Kalorien ----------
   function viewFood() {
-    const t = targets(), tot = dayTotals(foodDate);
-    const items = S.food[foodDate] || [];
-    const R = 80, C = 2 * Math.PI * R, frac = Math.min(1, tot.k / t.k);
     const isToday = foodDate === today();
-    const macro = (label, v, goal, cls) => `<div class="macro"><div class="spread"><b>${label}</b><span class="muted small">${fmt0(v)} / ${fmt0(goal)} g</span></div><div class="bar ${cls}"><div style="width:${Math.min(100, (v / goal) * 100)}%"></div></div></div>`;
-    return `<div class="head"><div><p class="sub">${isToday ? "Heute" : longDate(foodDate)}</p><h1>Ernährung</h1></div>
+    const wt = weightOn(foodDate);
+    const t = targets(wt);
+    const eaten = kcalOf(foodDate);
+    const left = t.k - eaten;
+    const entries = S.kcal[foodDate] || [];
+    const wDay = S.weights[foodDate];
+    const R = 80, C = 2 * Math.PI * R, frac = Math.min(1, eaten / t.k);
+    const ws = weightSeries();
+    const before = ws.filter((p) => p.date <= addDays(foodDate, -7)).pop();
+    const lastBefore = ws.filter((p) => p.date < foodDate).pop();
+    let wInfo;
+    if (wDay != null) {
+      wInfo = `Eingetragen: <b>${fmt(wDay)} kg</b>` + (before ? ` · ${fmtSigned(wDay - before.v)} kg seit ${shortDate(before.date)}` : "");
+    } else {
+      wInfo = lastBefore ? `Zuletzt ${fmt(lastBefore.v)} kg am ${shortDate(lastBefore.date)}` : "Noch kein Gewicht eingetragen";
+    }
+    return `<div class="head"><div><p class="sub">${isToday ? "Heute" : longDate(foodDate)}</p><h1>Gewicht &amp; kcal</h1></div>
         <div class="row"><button class="icon-btn" data-act="food-prev" aria-label="Vorheriger Tag"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
         <button class="icon-btn" data-act="food-next" aria-label="Nächster Tag" ${isToday ? 'style="opacity:.35"' : ""}><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button></div></div>
       <div class="tile">
+        <p class="label">Gewicht ${isToday ? "heute" : "an diesem Tag"}</p>
+        <form id="weight-form" class="row">
+          <input class="input" id="weight-in" inputmode="decimal" enterkeyhint="done" value="${wDay != null ? fmt(wDay) : ""}" placeholder="${wt ? fmt(wt) : "80"}" aria-label="Gewicht in kg">
+          <span class="muted" style="font-weight:600">kg</span>
+          <button class="btn primary" type="submit">Speichern</button>
+        </form>
+        <p class="muted small" style="margin:10px 0 0">${wInfo}</p>
+      </div>
+      <div class="tile" style="margin-top:12px">
+        <p class="label">Kalorien</p>
         <div class="ring-wrap"><div class="ring">
           <svg viewBox="0 0 190 190"><circle cx="95" cy="95" r="${R}" fill="none" stroke="rgba(60,71,114,.8)" stroke-width="14"/>
           <circle cx="95" cy="95" r="${R}" fill="none" stroke="url(#rg)" stroke-width="14" stroke-linecap="round" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - frac)}"/>
           <defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#505DC3"/><stop offset="1" stop-color="#95A3EC"/></linearGradient></defs></svg>
-          <div class="c"><p class="huge">${fmt0(tot.k)}</p><p class="muted small" style="margin:0">von ${fmt0(t.k)} kcal</p></div>
+          <div class="c"><p class="huge">${fmt0(Math.abs(left))}</p><p class="muted small" style="margin:0">${left >= 0 ? "kcal noch übrig" : "kcal über dem Ziel"}</p></div>
         </div></div>
-        ${macro("Protein", tot.p, t.p, "protein")}
-        ${macro("Kohlenhydrate", tot.c, t.c, "")}
-        ${macro("Fett", tot.f, t.f, "")}
+        <p style="text-align:center;margin:0 0 14px"><b>${fmt0(eaten)}</b> <span class="muted">von ${fmt0(t.k)} kcal gegessen</span></p>
+        <form id="kcal-form" class="row">
+          <input class="input" id="kcal-in" inputmode="numeric" enterkeyhint="done" placeholder="z. B. 650" aria-label="Kalorien">
+          <span class="muted" style="font-weight:600">kcal</span>
+          <button class="btn primary" type="submit">+ Dazu</button>
+        </form>
+        ${entries.length ? `<div style="margin-top:8px">${entries.map((x, i) => `<div class="food-item"><div class="grow muted small">${x.t ? esc(x.t) + " Uhr" : "Eintrag " + (i + 1)}</div><div class="kcal">${fmt0(x.k)} kcal</div><button class="icon-btn" style="width:36px;height:36px" data-act="kcal-del" data-i="${i}" aria-label="Eintrag löschen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`).join("")}</div>` : ""}
+        <p class="muted small" style="margin:12px 0 0">Ziel aus ${fmt(wt)} kg berechnet. Sobald du ein neues Gewicht einträgst, passt es sich automatisch an.</p>
       </div>
-      <div class="grid2" style="margin-top:12px">
-        <button class="btn primary" data-act="food-search">🔍 Suchen</button>
-        <button class="btn" data-act="food-scan">📷 Barcode</button>
-      </div>
-      ${S.recentFoods.length ? `<h2>Zuletzt gegessen</h2><div class="recent">${S.recentFoods.map((f, i) => `<button data-act="recent" data-i="${i}">${esc(f.name)} · ${fmt0(f.g)} g</button>`).join("")}</div>` : ""}
-      <h2>${isToday ? "Heute gegessen" : "Gegessen"}</h2>
-      <div class="tile">${items.length ? items.map((it, i) => `<button class="food-item" style="width:100%;text-align:left" data-act="food-item" data-i="${i}"><div class="grow"><div class="name">${esc(it.name)}</div><div class="muted small">${fmt0(it.g)} g · ${fmt0(it.p * it.g / 100)} g Protein</div></div><div class="kcal">${fmt0(it.k * it.g / 100)} kcal</div></button>`).join("") : `<div class="empty">Noch nichts eingetragen.</div>`}</div>`;
-  }
-
-  function searchSheet() {
-    openSheet(`<h2>Lebensmittel suchen</h2>
-      <input class="input" id="food-q" placeholder="z. B. Haferflocken, Skyr, Döner" autocomplete="off" enterkeyhint="search">
-      <div id="food-results" style="margin-top:12px"></div>
-      <button class="btn block" style="margin-top:12px" data-act="food-custom">+ Eigenes Lebensmittel anlegen</button>`);
-    setTimeout(() => { const q = $("#food-q"); if (q) q.focus(); }, 300);
-    renderResults("");
-  }
-  let searchT, lastResults = [], searchSeq = 0;
-  function renderResults(q) {
-    const box = $("#food-results");
-    if (!box) return;
-    const ql = q.trim().toLowerCase();
-    const local = S.customFoods.map((f) => Object.assign({ src: "Eigenes" }, f)).concat(window.BASE_FOODS.map((f) => Object.assign({ src: "Grundliste" }, f)));
-    const hits = ql ? local.filter((f) => f.name.toLowerCase().includes(ql)) : local.slice(0, 12);
-    lastResults = hits.slice(0, 20);
-    const draw = (online, status) => {
-      const all = lastResults.concat(online || []);
-      box.innerHTML = (all.length ? `<div class="tile" style="padding:6px 12px">${all.map((f, i) => `<button class="result" data-act="pick-food" data-i="${i}"><div><div class="name">${esc(f.name)}</div><div class="muted small">${esc(f.src)}${f.brand ? " · " + esc(f.brand) : ""}</div></div><div class="small" style="text-align:right;white-space:nowrap"><b>${fmt0(f.k)} kcal</b><div class="muted">${fmt(f.p)} g P / 100 g</div></div></button>`).join("")}</div>` : "") + (status ? `<p class="muted small" style="text-align:center">${status}</p>` : "");
-      box._all = all;
-    };
-    draw([], ql.length >= 3 ? "Suche online …" : "");
-    clearTimeout(searchT);
-    if (ql.length < 3) return;
-    const seq = ++searchSeq;
-    searchT = setTimeout(async () => {
-      try {
-        const url = "https://world.openfoodfacts.org/cgi/search.pl?search_terms=" + encodeURIComponent(q.trim()) + "&search_simple=1&action=process&json=1&page_size=20&sort_by=unique_scans_n&lc=de&fields=product_name,product_name_de,brands,nutriments,code";
-        const r = await fetch(url);
-        const j = await r.json();
-        if (seq !== searchSeq) return;
-        const online = (j.products || []).map(offToFood).filter(Boolean);
-        draw(online, online.length ? "" : "Online nichts gefunden");
-      } catch (e) {
-        if (seq === searchSeq) draw([], "Online-Suche gerade nicht erreichbar – Grundliste wird angezeigt");
-      }
-    }, 800);
-  }
-  function offToFood(p) {
-    const n = p.nutriments || {};
-    let k = n["energy-kcal_100g"];
-    if (k == null && n["energy_100g"] != null) k = n["energy_100g"] / 4.184;
-    const name = p.product_name_de || p.product_name;
-    if (!name || k == null) return null;
-    return { name, brand: p.brands || "", src: "Open Food Facts", k: +k || 0, p: +n.proteins_100g || 0, c: +n.carbohydrates_100g || 0, f: +n.fat_100g || 0 };
-  }
-  let pendingFood = null, editIdx = null;
-  function amountSheet(food, grams, idx) {
-    pendingFood = food; editIdx = idx == null ? null : idx;
-    const g = grams || 100;
-    openSheet(`<h2>${esc(food.name)}</h2>
-      <p class="muted small" style="margin-top:-4px">Pro 100 g: ${fmt0(food.k)} kcal · ${fmt(food.p)} g P · ${fmt(food.c)} g KH · ${fmt(food.f)} g F</p>
-      <label class="field"><span>Menge in Gramm</span><input class="input" id="food-g" inputmode="decimal" value="${fmt(g)}"></label>
-      <div class="row" style="flex-wrap:wrap">${[50, 100, 150, 200, 300].map((v) => `<button class="btn small" data-act="set-g" data-v="${v}">${v} g</button>`).join("")}</div>
-      <div class="tile" style="margin-top:14px" id="food-preview"></div>
-      <button class="btn primary block" style="margin-top:14px" data-act="food-save">${editIdx == null ? "Hinzufügen" : "Speichern"}</button>
-      ${editIdx != null ? `<button class="btn block danger" style="margin-top:10px" data-act="food-delete">Löschen</button>` : ""}`);
-    updatePreview();
-  }
-  function updatePreview() {
-    const el = $("#food-preview"), inp = $("#food-g");
-    if (!el || !inp || !pendingFood) return;
-    const m = num(inp.value) / 100, f = pendingFood;
-    el.innerHTML = `<div class="spread"><b style="font-size:22px">${fmt0(f.k * m)} kcal</b><span class="muted small">${fmt0(f.p * m)} g P · ${fmt0(f.c * m)} g KH · ${fmt0(f.f * m)} g F</span></div>`;
-  }
-  function customFoodSheet(prefill) {
-    openSheet(`<h2>Eigenes Lebensmittel</h2>
-      <p class="muted small" style="margin-top:-4px">Werte pro 100 g (stehen auf der Verpackung).</p>
-      <form id="custom-food">
-        <label class="field"><span>Name</span><input class="input" name="name" value="${esc(prefill || "")}"></label>
-        <div class="grid2">
-          <label class="field"><span>Kalorien (kcal)</span><input class="input" name="k" inputmode="decimal"></label>
-          <label class="field"><span>Protein (g)</span><input class="input" name="p" inputmode="decimal"></label>
-          <label class="field"><span>Kohlenhydrate (g)</span><input class="input" name="c" inputmode="decimal"></label>
-          <label class="field"><span>Fett (g)</span><input class="input" name="f" inputmode="decimal"></label>
-        </div>
-        <button class="btn primary block" type="submit">Weiter</button>
-      </form>`);
-  }
-
-  // Barcode
-  let scanReader = null;
-  function scanSheet() {
-    openSheet(`<h2>Barcode scannen</h2>
-      <div class="scanner"><video id="scan-video" playsinline muted></video><div class="frame"></div></div>
-      <p class="muted small" id="scan-status" style="text-align:center">Kamera wird gestartet …</p>
-      <div class="row"><input class="input" id="scan-manual" inputmode="numeric" placeholder="Oder Nummer eintippen"><button class="btn" data-act="scan-manual">OK</button></div>`);
-    startScan();
-  }
-  function loadZXing() {
-    if (window.ZXing) return Promise.resolve();
-    return new Promise((res, rej) => {
-      const s = document.createElement("script");
-      s.src = "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js";
-      s.onload = res; s.onerror = rej;
-      document.head.appendChild(s);
-    });
-  }
-  async function startScan() {
-    const status = () => $("#scan-status");
-    try {
-      await loadZXing();
-      if (!$("#scan-video")) return;
-      scanReader = new window.ZXing.BrowserMultiFormatReader();
-      await scanReader.decodeFromConstraints({ video: { facingMode: "environment" } }, "scan-video", (result) => {
-        if (result) { const code = result.getText(); stopScan(); lookupBarcode(code); }
-      });
-      if (status()) status().textContent = "Halte den Barcode in den Rahmen";
-    } catch (e) {
-      if (status()) status().textContent = "Kamera nicht verfügbar. Tippe die Nummer unter dem Barcode ein.";
-    }
-  }
-  function stopScan() { try { if (scanReader) scanReader.reset(); } catch (e) { } scanReader = null; }
-  async function lookupBarcode(code) {
-    code = String(code).replace(/\D/g, "");
-    if (!code) return;
-    openSheet(`<h2>Suche Produkt …</h2><p class="muted">Barcode ${esc(code)}</p>`);
-    try {
-      const r = await fetch("https://world.openfoodfacts.org/api/v2/product/" + code + ".json?fields=product_name,product_name_de,brands,nutriments");
-      const j = await r.json();
-      const f = j.status === 1 ? offToFood(j.product) : null;
-      if (f) { amountSheet(f, 100); return; }
-      openSheet(`<h2>Nicht gefunden</h2><p class="muted">Das Produkt mit Barcode ${esc(code)} ist nicht in der Datenbank. Du kannst es selbst anlegen.</p><button class="btn primary block" data-act="food-custom">Eigenes Lebensmittel anlegen</button>`);
-    } catch (e) {
-      openSheet(`<h2>Keine Verbindung</h2><p class="muted">Für die Barcode-Suche brauchst du Internet.</p>`);
-    }
+      <h2>Gewichtsverlauf</h2>
+      <div class="tile">${ws.length >= 2 ? `<svg class="chart" id="wchart"></svg>
+        <div class="grid2" style="margin-top:8px">
+          <div><p class="label">Start</p><p class="big">${fmt(ws[0].v)} kg</p><p class="muted small" style="margin:0">${shortDate(ws[0].date)}</p></div>
+          <div><p class="label">Aktuell</p><p class="big">${fmt(ws[ws.length - 1].v)} kg</p><p class="muted small" style="margin:0">${fmtSigned(ws[ws.length - 1].v - ws[0].v)} kg insgesamt</p></div>
+        </div>` : `<div class="empty">Trag an mindestens zwei Tagen dein Gewicht ein, dann siehst du hier die Kurve.</div>`}</div>`;
   }
 
   // ---------- Einstellungen ----------
   function settingsSheet() {
     const t = targets();
     openSheet(`<h2>Einstellungen</h2>
-      <div class="tile" style="margin-bottom:12px"><p class="label">Deine Tagesziele</p>
-        <p style="margin:0"><b>${fmt0(t.k)} kcal</b> · ${t.p} g Protein · ${t.c} g KH · ${t.f} g Fett</p>
-        <p class="muted small" style="margin:6px 0 0">Berechnet mit der Mifflin-St-Jeor-Formel, +300 kcal für Muskelaufbau, 1,8 g Protein pro kg Körpergewicht, 25 % Fett.</p></div>
+      <div class="tile" style="margin-bottom:12px"><p class="label">Dein Tagesziel</p>
+        <p style="margin:0"><b>${fmt0(t.k)} kcal</b> pro Tag</p>
+        <p class="muted small" style="margin:6px 0 0">Berechnet mit der Mifflin-St-Jeor-Formel aus deinem zuletzt eingetragenen Gewicht, +300 kcal für Muskelaufbau. Passt sich bei jedem neuen Gewicht an.</p></div>
       <div class="tile" style="margin-bottom:12px"><p class="label">Profil</p>${profileForm(S.profile, "Profil speichern")}</div>
       <div class="tile" style="margin-bottom:12px"><p class="label">Eigene Übung</p>
         <form id="custom-ex">
@@ -838,17 +872,9 @@
     swipeY = null; swipeDy = 0;
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#sheet").classList.contains("hidden")) closeSheet(); });
-  function closeSheet() { stopScan(); $("#sheet").classList.add("hidden"); $("#sheet").innerHTML = ""; document.body.style.overflow = ""; }
+  function closeSheet() { $("#sheet").classList.add("hidden"); $("#sheet").innerHTML = ""; document.body.style.overflow = ""; }
 
   // ---------- Aktionen ----------
-  function addFood(food, g) {
-    const list = S.food[foodDate] || (S.food[foodDate] = []);
-    const item = { id: uid(), name: food.name, g, k: food.k, p: food.p, c: food.c, f: food.f };
-    list.push(item);
-    S.recentFoods = [{ name: food.name, g, k: food.k, p: food.p, c: food.c, f: food.f }].concat(S.recentFoods.filter((r) => r.name !== food.name)).slice(0, 15);
-    save();
-  }
-
   document.addEventListener("click", (ev) => {
     const navBtn = ev.target.closest("[data-nav]");
     if (navBtn && !ev.target.closest("[data-act]")) { go(navBtn.dataset.nav); return; }
@@ -957,31 +983,22 @@
         if (S.active) { toast("Beende zuerst das laufende Training"); break; }
         pickDate = a.dataset.date; closeSheet(); go("training"); break;
 
+      case "week": selWeek = a.dataset.k; render(); break;
       case "badge": badgeSheet(a.dataset.id); break;
       case "info": { const p = $("#info-text"); if (p) { p.textContent = window.INFO_TEXT[a.dataset.kind] || ""; p.classList.toggle("hidden"); } break; }
 
       case "food-prev": foodDate = addDays(foodDate, -1); render(); break;
       case "food-next": if (foodDate < today()) { foodDate = addDays(foodDate, 1); render(); } break;
-      case "food-search": searchSheet(); break;
-      case "food-scan": scanSheet(); break;
-      case "scan-manual": { const v = $("#scan-manual").value; stopScan(); lookupBarcode(v); break; }
-      case "food-custom": customFoodSheet($("#food-q") ? $("#food-q").value : ""); break;
-      case "pick-food": { const all = $("#food-results")._all || []; const f = all[Number(a.dataset.i)]; if (f) amountSheet(f, 100); break; }
-      case "recent": { const f = S.recentFoods[Number(a.dataset.i)]; if (f) amountSheet(f, f.g); break; }
-      case "food-item": { const it = (S.food[foodDate] || [])[Number(a.dataset.i)]; if (it) amountSheet(it, it.g, Number(a.dataset.i)); break; }
-      case "set-g": $("#food-g").value = a.dataset.v; updatePreview(); break;
-      case "food-save": {
-        const g = num($("#food-g").value);
-        if (g <= 0) { toast("Bitte eine Menge eingeben"); break; }
-        if (editIdx != null) { S.food[foodDate][editIdx].g = g; save(); }
-        else addFood(pendingFood, g);
-        closeSheet(); render(); checkBadges(); break;
+      case "kcal-del": {
+        const list = S.kcal[foodDate] || [];
+        list.splice(Number(a.dataset.i), 1);
+        if (!list.length) delete S.kcal[foodDate];
+        save(); render(); break;
       }
-      case "food-delete": S.food[foodDate].splice(editIdx, 1); save(); closeSheet(); render(); break;
 
       case "export": exportData(); break;
       case "reset":
-        if (confirm("Wirklich ALLE Daten löschen? Trainings, Ernährung und Abzeichen sind danach weg. Das kann nicht rückgängig gemacht werden.")) {
+        if (confirm("Wirklich ALLE Daten löschen? Trainings, Gewicht, Kalorien und Abzeichen sind danach weg. Das kann nicht rückgängig gemacht werden.")) {
           S = blank(); save(); closeSheet(); stopTimer(); go("home");
         }
         break;
@@ -1003,8 +1020,7 @@
       const s = w.entries[Number(t.dataset.ei)].sets[Number(t.dataset.si)];
       s[t.dataset.f] = Math.max(0, num(t.value));
       save();
-    } else if (t.id === "food-q") renderResults(t.value);
-    else if (t.id === "food-g") updatePreview();
+    }
   });
   document.addEventListener("change", (ev) => {
     const t = ev.target;
@@ -1024,7 +1040,7 @@
           const data = JSON.parse(r.result);
           if (!data || !Array.isArray(data.workouts)) throw new Error();
           if (!confirm("Backup laden? Deine aktuellen Daten auf diesem Handy werden dabei ersetzt.")) return;
-          S = Object.assign(blank(), data); save(); checkBadges(true); closeSheet(); go("home"); toast("Backup geladen");
+          S = migrate(Object.assign(blank(), data)); save(); checkBadges(true); closeSheet(); go("home"); toast("Backup geladen");
         } catch (e) { toast("Diese Datei ist kein gültiges Backup"); }
       };
       r.readAsText(t.files[0]);
@@ -1036,7 +1052,10 @@
     if (f.id === "profile-form") {
       const p = readProfile(f); if (!p) return;
       const first = !S.profile;
-      S.profile = p; save(); closeSheet();
+      const weightChanged = !S.profile || S.profile.weight !== p.weight;
+      S.profile = p;
+      if (weightChanged) S.weights[today()] = p.weight;
+      syncProfileWeight(); save(); closeSheet();
       if (first) { tab = "home"; }
       render(); toast(first ? "Willkommen, " + p.name : "Profil gespeichert");
     } else if (f.id === "custom-ex") {
@@ -1044,12 +1063,27 @@
       if (!name) { toast("Bitte einen Namen eingeben"); return; }
       S.customExercises.push({ id: "own-" + uid(), m: fd.get("m"), name, t: fd.get("t") === "c" ? "c" : "i" });
       save(); f.reset(); toast("Übung hinzugefügt");
-    } else if (f.id === "custom-food") {
-      const fd = new FormData(f); const name = String(fd.get("name") || "").trim();
-      if (!name) { toast("Bitte einen Namen eingeben"); return; }
-      const food = { name, k: num(fd.get("k")), p: num(fd.get("p")), c: num(fd.get("c")), f: num(fd.get("f")) };
-      S.customFoods = [food].concat(S.customFoods.filter((x) => x.name !== name)); save();
-      amountSheet(food, 100);
+    } else if (f.id === "weight-form") {
+      const raw = $("#weight-in").value.trim();
+      const oldK = targets().k;
+      if (!raw) {
+        if (S.weights[foodDate] == null) { toast("Bitte ein Gewicht eingeben"); return; }
+        delete S.weights[foodDate];
+      } else {
+        const kg = num(raw);
+        if (kg < 30 || kg > 300) { toast("Bitte ein gültiges Gewicht eingeben"); return; }
+        S.weights[foodDate] = Math.round(kg * 10) / 10;
+      }
+      syncProfileWeight(); save(); render(); checkBadges();
+      const newK = targets().k;
+      toast(!raw ? "Eintrag gelöscht" : newK !== oldK ? `Gespeichert · neues Ziel ${fmt0(newK)} kcal` : "Gewicht gespeichert");
+    } else if (f.id === "kcal-form") {
+      const k = Math.round(num($("#kcal-in").value));
+      if (k <= 0 || k > 10000) { toast("Bitte Kalorien eingeben"); return; }
+      const d = new Date();
+      (S.kcal[foodDate] || (S.kcal[foodDate] = [])).push({ id: uid(), k, t: foodDate === today() ? pad(d.getHours()) + ":" + pad(d.getMinutes()) : "" });
+      save(); render(); checkBadges();
+      const inp = $("#kcal-in"); if (inp) inp.blur();
     }
   });
 

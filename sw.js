@@ -1,6 +1,6 @@
 // Offline-Speicher für die App-Dateien.
 // Bei jeder Änderung an der App die Versionsnummer erhöhen.
-const CACHE = "fitness-v3";
+const CACHE = "fitness-v4";
 const FILES = [
   "./",
   "./index.html",
@@ -8,7 +8,6 @@ const FILES = [
   "./manifest.json",
   "./js/app.js",
   "./js/exercises.js",
-  "./js/foods.js",
   "./js/badges.js",
   "./icons/icon.svg",
   "./icons/icon-180.png",

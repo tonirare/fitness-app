@@ -42,9 +42,9 @@
     { id: "vol100t", icon: "🚚", name: "100 Tonnen", desc: "Insgesamt 100.000 kg bewegt", prog: s => Math.min(1, s.totalVolume / 100000) },
     { id: "vol1000t", icon: "🚢", name: "1.000 Tonnen", desc: "Insgesamt 1.000.000 kg bewegt", prog: s => Math.min(1, s.totalVolume / 1000000) },
 
-    // Ernährung
-    { id: "food7", icon: "🥗", name: "Ernährungs-Woche", desc: "7 Tage Essen eingetragen", prog: s => Math.min(1, s.foodDays / 7) },
-    { id: "protein7", icon: "🥩", name: "Protein-Profi", desc: "7 Tage am Stück dein Proteinziel erreicht", prog: s => Math.min(1, s.proteinStreak / 7) },
+    // Gewicht & Kalorien
+    { id: "food7", icon: "🥗", name: "Kalorien-Woche", desc: "An 7 Tagen Kalorien eingetragen", prog: s => Math.min(1, s.foodDays / 7) },
+    { id: "weigh7", icon: "⚖️", name: "Waage-Routine", desc: "7 Tage am Stück dein Gewicht eingetragen", prog: s => Math.min(1, s.weightStreak / 7) },
 
     // Geheim
     { id: "early", secret: true, icon: "🌅", name: "Frühaufsteher", desc: "Ein Training vor 7 Uhr begonnen", prog: s => s.early ? 1 : 0 },
