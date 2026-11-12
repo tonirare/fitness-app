@@ -334,3 +334,15 @@ p.gold-text, span.gold-text, small.gold-text, div.gold-text { display: inline-bl
 #weight-form .input, #kcal-form .input { flex: 1; min-width: 0; font-size: 20px; font-weight: 700; }
 #weight-form .btn, #kcal-form .btn { flex-shrink: 0; }
 .set-prev { grid-column: 2 / 4; margin-top: -4px; font-size: 12px; color: var(--text-3); text-align: center; }
+
+/* Ziel-Auswahl */
+.goal-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.goal-pick button { text-align: left; padding: 12px; border-radius: var(--radius-sm); background: rgba(14, 16, 36, .55); border: 1px solid var(--glass-border); display: flex; flex-direction: column; gap: 4px; }
+.goal-pick button b { font-size: 15px; }
+.goal-pick button small { font-size: 12px; color: var(--text-3); line-height: 1.3; }
+.goal-pick button.on { background: var(--accent); border-color: var(--accent-hi); }
+.goal-pick button.on small { color: #E3E7FF; }
+.macros3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
+.macros3 > div { background: rgba(14, 16, 36, .35); border-radius: var(--radius-sm); padding: 10px; text-align: center; }
+.macros3 b { display: block; font-size: 18px; }
+.macros3 small { font-size: 11px; color: var(--text-3); }

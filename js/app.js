@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const APP_VERSION = 4; // bei jeder Änderung zusammen mit CACHE in sw.js erhöhen
+  const APP_VERSION = 5; // bei jeder Änderung zusammen mit CACHE in sw.js erhöhen
 
   // ---------- Speicher ----------
   const KEY = "fit.v1";
@@ -62,13 +62,28 @@
   const doneSets = (w) => w.entries.reduce((a, e) => a + e.sets.filter((s) => s.done).length, 0);
 
   // ---------- Ziele ----------
-  // Kalorienziel aus dem aktuellen Gewicht (Mifflin-St-Jeor, +300 kcal für Muskelaufbau)
+  // Ziele: Kalorien-Anpassung zum Tagesbedarf und Protein pro kg Körpergewicht
+  const GOALS = {
+    lose: { name: "Abnehmen", icon: "🔥", kcal: -500, prot: 2.0, desc: "ca. 0,5 kg pro Woche weniger, Muskeln bleiben erhalten" },
+    cut: { name: "Definieren", icon: "✂️", kcal: -250, prot: 2.0, desc: "langsam Fett verlieren, Kraft halten" },
+    keep: { name: "Gewicht halten", icon: "⚖️", kcal: 0, prot: 1.6, desc: "Muskeln erhalten, Gewicht stabil" },
+    gain: { name: "Muskelaufbau", icon: "💪", kcal: 300, prot: 1.8, desc: "leichter Überschuss für mehr Muskeln" }
+  };
+  const goalOf = (p) => GOALS[(p && p.goal) || "gain"] || GOALS.gain;
+  // Tagesziel aus dem aktuellen Gewicht (Mifflin-St-Jeor × Aktivität ± Ziel)
   function targets(weight) {
     const p = S.profile;
-    if (!p) return { k: 2500 };
+    if (!p) return { k: 2500, p: 150, f: 70, c: 300, tdee: 2500 };
+    const g = goalOf(p);
     const kg = weight || weightOn(today());
     const bmr = 10 * kg + 6.25 * p.height - 5 * p.age + (p.sex === "f" ? -161 : 5);
-    return { k: Math.round((bmr * p.activity + 300) / 50) * 50 };
+    const tdee = bmr * p.activity;
+    // nie unter den Grundumsatz gehen
+    const k = Math.round(Math.max(bmr, tdee + g.kcal) / 50) * 50;
+    const prot = Math.round(kg * g.prot);
+    const fat = Math.round(Math.max(kg * 0.8, (k * 0.25) / 9));
+    const carbs = Math.max(0, Math.round((k - prot * 4 - fat * 9) / 4));
+    return { k, p: prot, f: fat, c: carbs, tdee: Math.round(tdee / 50) * 50 };
   }
   const kcalOf = (date) => (S.kcal[date] || []).reduce((a, x) => a + x.k, 0);
   // letztes eingetragenes Gewicht an oder vor diesem Tag
@@ -296,7 +311,8 @@
 
   // ---------- Profil ----------
   function profileForm(p, submitLabel) {
-    p = p || { name: "", sex: "m", age: "", height: "", weight: "", activity: 1.55 };
+    p = p || { name: "", sex: "m", age: "", height: "", weight: "", activity: 1.55, goal: "" };
+    const goal = p.goal || (p.name ? "gain" : "");
     const acts = [[1.2, "Wenig Bewegung (Büro, kaum Sport)"], [1.375, "Leicht aktiv (1–3× Training/Woche)"], [1.55, "Aktiv (3–5× Training/Woche)"], [1.725, "Sehr aktiv (6–7× Training oder körperliche Arbeit)"], [1.9, "Extrem aktiv (harte körperliche Arbeit + Training)"]];
     return `<form id="profile-form">
       <label class="field"><span>Dein Name</span><input class="input" name="name" value="${esc(p.name)}" placeholder="Albi" autocomplete="given-name"></label>
@@ -312,18 +328,23 @@
       <label class="field"><span>Aktivität im Alltag</span><select class="input" name="activity">
         ${acts.map(([v, l]) => `<option value="${v}" ${Number(p.activity) === v ? "selected" : ""}>${l}</option>`).join("")}
       </select></label>
+      <div class="field"><span>Dein Ziel</span>
+        <div class="goal-pick" data-seg="goal">${Object.entries(GOALS).map(([id, g]) => `<button type="button" data-v="${id}" class="${goal === id ? "on" : ""}"><b>${g.icon} ${g.name}</b><small>${g.desc}</small></button>`).join("")}</div>
+        <input type="hidden" name="goal" value="${esc(goal)}">
+      </div>
       <button class="btn primary block" type="submit">${submitLabel}</button>
     </form>`;
   }
   function readProfile(form) {
     const fd = new FormData(form);
-    const p = { name: String(fd.get("name") || "").trim(), sex: fd.get("sex") === "f" ? "f" : "m", age: num(fd.get("age")), height: num(fd.get("height")), weight: num(fd.get("weight")), activity: num(fd.get("activity")) || 1.55 };
+    const p = { name: String(fd.get("name") || "").trim(), sex: fd.get("sex") === "f" ? "f" : "m", age: num(fd.get("age")), height: num(fd.get("height")), weight: num(fd.get("weight")), activity: num(fd.get("activity")) || 1.55, goal: GOALS[fd.get("goal")] ? String(fd.get("goal")) : "" };
     if (!p.name || p.age < 10 || p.height < 100 || p.weight < 30) { toast("Bitte alle Felder ausfüllen"); return null; }
+    if (!p.goal) { toast("Bitte wähle dein Ziel"); return null; }
     return p;
   }
   function viewOnboarding() {
     return `<div class="head"><div><p class="sub">Willkommen</p><h1>Los geht's</h1></div></div>
-      <div class="tile"><p class="muted small" style="margin-top:0">Mit diesen Angaben rechnet die App deine Tagesziele für Kalorien und Protein aus. Alles bleibt nur auf deinem Handy.</p>
+      <div class="tile"><p class="muted small" style="margin-top:0">Mit diesen Angaben rechnet die App aus, wie viele Kalorien und Nährwerte du für dein Ziel brauchst. Alles bleibt nur auf deinem Handy.</p>
       ${profileForm(null, "Starten")}</div>`;
   }
 
@@ -798,7 +819,12 @@
           <button class="btn primary" type="submit">+ Dazu</button>
         </form>
         ${entries.length ? `<div style="margin-top:8px">${entries.map((x, i) => `<div class="food-item"><div class="grow muted small">${x.t ? esc(x.t) + " Uhr" : "Eintrag " + (i + 1)}</div><div class="kcal">${fmt0(x.k)} kcal</div><button class="icon-btn" style="width:36px;height:36px" data-act="kcal-del" data-i="${i}" aria-label="Eintrag löschen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`).join("")}</div>` : ""}
-        <p class="muted small" style="margin:12px 0 0">Ziel aus ${fmt(wt)} kg berechnet. Sobald du ein neues Gewicht einträgst, passt es sich automatisch an.</p>
+        <div class="macros3">
+          <div><b>${fmt0(t.p)} g</b><small>Protein</small></div>
+          <div><b>${fmt0(t.c)} g</b><small>Kohlenhydrate</small></div>
+          <div><b>${fmt0(t.f)} g</b><small>Fett</small></div>
+        </div>
+        <p class="muted small" style="margin:12px 0 0">Ziel: <b>${goalOf(S.profile).icon} ${goalOf(S.profile).name}</b>, berechnet aus ${fmt(wt)} kg. Richtwerte pro Tag zur Orientierung. Bei jedem neuen Gewicht passt sich alles automatisch an.</p>
       </div>
       <h2>Gewichtsverlauf</h2>
       <div class="tile">${ws.length >= 2 ? `<svg class="chart" id="wchart"></svg>
@@ -813,8 +839,9 @@
     const t = targets();
     openSheet(`<h2>Einstellungen</h2>
       <div class="tile" style="margin-bottom:12px"><p class="label">Dein Tagesziel</p>
-        <p style="margin:0"><b>${fmt0(t.k)} kcal</b> pro Tag</p>
-        <p class="muted small" style="margin:6px 0 0">Berechnet mit der Mifflin-St-Jeor-Formel aus deinem zuletzt eingetragenen Gewicht, +300 kcal für Muskelaufbau. Passt sich bei jedem neuen Gewicht an.</p></div>
+        <p style="margin:0"><b>${fmt0(t.k)} kcal</b> pro Tag · ${goalOf(S.profile).icon} ${goalOf(S.profile).name}</p>
+        <p style="margin:4px 0 0">${t.p} g Protein · ${t.c} g KH · ${t.f} g Fett</p>
+        <p class="muted small" style="margin:6px 0 0">Dein Bedarf liegt bei rund ${fmt0(t.tdee)} kcal (Mifflin-St-Jeor-Formel × Aktivität, aus deinem zuletzt eingetragenen Gewicht). Für dein Ziel ${goalOf(S.profile).kcal > 0 ? "kommen " + goalOf(S.profile).kcal + " kcal dazu" : goalOf(S.profile).kcal < 0 ? "werden " + -goalOf(S.profile).kcal + " kcal abgezogen" : "bleibt es dabei"}. Protein: ${fmt(goalOf(S.profile).prot)} g pro kg Körpergewicht, Fett ca. 25 %, der Rest Kohlenhydrate. Ziel ändern kannst du unten im Profil.</p></div>
       <div class="tile" style="margin-bottom:12px"><p class="label">Profil</p>${profileForm(S.profile, "Profil speichern")}</div>
       <div class="tile" style="margin-bottom:12px"><p class="label">Eigene Übung</p>
         <form id="custom-ex">
@@ -883,7 +910,8 @@
     if (segBtn) {
       const seg = segBtn.parentElement;
       seg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === segBtn));
-      if (seg.dataset.seg === "sex") { seg.parentElement.querySelector("input[name=sex]").value = segBtn.dataset.v; }
+      const hidden = seg.parentElement.querySelector(`input[type=hidden][name="${seg.dataset.seg}"]`);
+      if (hidden) hidden.value = segBtn.dataset.v;
       if (seg.dataset.seg === "metric") { progMetric = segBtn.dataset.v; drawChart(); }
       return;
     }
